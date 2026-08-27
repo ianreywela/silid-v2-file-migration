@@ -115,6 +115,32 @@ export async function getRunnableBatches() {
     .orderBy(migrationBatches.createdAt);
 }
 
+export async function countFilePathsForSchoolJob(schoolJobId: string): Promise<number> {
+  const [row] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(migrationFilePaths)
+    .where(eq(migrationFilePaths.schoolJobId, schoolJobId));
+
+  return row?.count ?? 0;
+}
+
+export async function reconcilePausedSchoolJobs(batchId: string) {
+  const batchStatus = await getBatchStatus(batchId);
+  if (batchStatus !== "running" && batchStatus !== "queued") {
+    return;
+  }
+
+  await db
+    .update(migrationSchoolJobs)
+    .set({ status: "pending", updatedAt: new Date() })
+    .where(
+      and(
+        eq(migrationSchoolJobs.batchId, batchId),
+        eq(migrationSchoolJobs.status, "paused"),
+      ),
+    );
+}
+
 export async function getPendingSchoolJobs(batchId: string) {
   return db
     .select()

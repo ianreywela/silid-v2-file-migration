@@ -2,6 +2,7 @@ import { collectFolderPathsBySchool } from "@/lib/migration/collect-paths";
 import { transferFile } from "@/lib/migration/transfer-file";
 import {
   appendLog,
+  countFilePathsForSchoolJob,
   getBatchStatus,
   getPendingFilePaths,
   markFilePath,
@@ -11,46 +12,97 @@ import {
 } from "@/lib/migration/repository";
 import type { MigrationSchoolJob } from "@/drizzle/schema";
 
+const BATCH_STATUS_RETRIES = 5;
+const BATCH_STATUS_RETRY_MS = 500;
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function isBatchRunnable(batchId: string, schoolJobId: string): Promise<boolean> {
+  for (let attempt = 0; attempt < BATCH_STATUS_RETRIES; attempt++) {
+    const batchStatus = await getBatchStatus(batchId);
+
+    if (batchStatus === "running" || batchStatus === "queued") {
+      return true;
+    }
+
+    if (batchStatus === "paused" || batchStatus === "cancelled") {
+      await updateSchoolJob(schoolJobId, { status: "paused" });
+      return false;
+    }
+
+    if (attempt < BATCH_STATUS_RETRIES - 1) {
+      await sleep(BATCH_STATUS_RETRY_MS * (attempt + 1));
+    }
+  }
+
+  await updateSchoolJob(schoolJobId, { status: "paused" });
+  await appendLog(
+    schoolJobId,
+    "PAUSE",
+    "batch status unavailable after retries; school job paused",
+  );
+  return false;
+}
+
 export async function processSchoolJob(job: MigrationSchoolJob): Promise<void> {
   const { id: schoolJobId, batchId, schoolCode } = job;
 
-  const batchStatus = await getBatchStatus(batchId);
-  if (!batchStatus || batchStatus === "paused" || batchStatus === "cancelled") {
-    await updateSchoolJob(schoolJobId, { status: "paused" });
+  if (!(await isBatchRunnable(batchId, schoolJobId))) {
     return;
   }
 
-  await updateSchoolJob(schoolJobId, {
-    status: "collecting",
-    startedAt: job.startedAt ?? new Date(),
-  });
+  const collectedFileCount = await countFilePathsForSchoolJob(schoolJobId);
+  const shouldCollect = collectedFileCount === 0;
 
-  await appendLog(
-    schoolJobId,
-    "START",
-    `schoolCode=${schoolCode} schoolName=${job.schoolName}`,
-  );
+  if (shouldCollect) {
+    await updateSchoolJob(schoolJobId, {
+      status: "collecting",
+      startedAt: job.startedAt ?? new Date(),
+    });
 
-  const collection = await collectFolderPathsBySchool(schoolCode, (tag, message) => {
-    void appendLog(schoolJobId, tag, message);
-  });
+    await appendLog(
+      schoolJobId,
+      "START",
+      `schoolCode=${schoolCode} schoolName=${job.schoolName}`,
+    );
 
-  await updateSchoolJob(schoolJobId, {
-    userCount: collection.userCount,
-    classCount: collection.classCount,
-  });
+    const collection = await collectFolderPathsBySchool(schoolCode, (tag, message) => {
+      void appendLog(schoolJobId, tag, message);
+    });
 
-  await upsertFilePaths(schoolJobId, collection.folderPaths);
-  await refreshSchoolJobCounts(schoolJobId);
+    await updateSchoolJob(schoolJobId, {
+      userCount: collection.userCount,
+      classCount: collection.classCount,
+    });
 
-  const pendingBefore = await getPendingFilePaths(schoolJobId);
-  await appendLog(
-    schoolJobId,
-    "JSON",
-    `collected=${collection.folderPaths.length} pending=${pendingBefore.length}`,
-  );
+    await upsertFilePaths(schoolJobId, collection.folderPaths);
+    await refreshSchoolJobCounts(schoolJobId);
 
-  if (pendingBefore.length === 0) {
+    const pendingBefore = await getPendingFilePaths(schoolJobId);
+    await appendLog(
+      schoolJobId,
+      "JSON",
+      `collected=${collection.folderPaths.length} pending=${pendingBefore.length}`,
+    );
+  } else {
+    await updateSchoolJob(schoolJobId, {
+      status: "transferring",
+      startedAt: job.startedAt ?? new Date(),
+    });
+
+    await appendLog(
+      schoolJobId,
+      "RESUME",
+      `schoolCode=${schoolCode} resuming transfer (${collectedFileCount} paths in database)`,
+    );
+
+    await refreshSchoolJobCounts(schoolJobId);
+  }
+
+  const pendingBeforeTransfer = await getPendingFilePaths(schoolJobId);
+  if (pendingBeforeTransfer.length === 0) {
     await updateSchoolJob(schoolJobId, {
       status: "completed",
       completedAt: new Date(),
@@ -67,12 +119,8 @@ export async function processSchoolJob(job: MigrationSchoolJob): Promise<void> {
   for (const file of pendingFiles) {
     index += 1;
 
-    const currentBatchStatus = await getBatchStatus(batchId);
-    if (
-      !currentBatchStatus ||
-      currentBatchStatus === "paused" ||
-      currentBatchStatus === "cancelled"
-    ) {
+    const batchStatus = await getBatchStatus(batchId);
+    if (!batchStatus || batchStatus === "paused" || batchStatus === "cancelled") {
       await updateSchoolJob(schoolJobId, { status: "paused" });
       await appendLog(schoolJobId, "PAUSE", "batch paused or cancelled");
       return;

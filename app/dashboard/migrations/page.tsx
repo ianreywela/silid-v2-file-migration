@@ -23,8 +23,10 @@ import {
 import { TerminalLogViewer } from "@/components/terminal-log-viewer";
 import { SchoolTableCell, SchoolTableHead } from "@/components/school-table-cell";
 import { BatchDetailTabs, type BatchDetailTab } from "@/components/batch-detail-tabs";
+import { TableSortButton } from "@/components/table-sort-button";
 import { cn } from "@/lib/utils";
 import { formatBytes } from "@/lib/utils/format-bytes";
+import { sortRows, sortRowsByStatus } from "@/lib/utils/sort-table-rows";
 
 type School = {
   schoolCode: string;
@@ -97,6 +99,28 @@ type BatchSummary = {
   totalPending: number;
 };
 
+type AnalyticsSortColumn =
+  | "school"
+  | "status"
+  | "transferred"
+  | "size"
+  | "pending"
+  | "failed";
+
+type ActiveBatchSortColumn =
+  | "school"
+  | "status"
+  | "collected"
+  | "transferred"
+  | "pending"
+  | "failed"
+  | "skipped";
+
+type SortState<T extends string> = {
+  column: T;
+  order: "asc" | "desc";
+};
+
 function statusVariant(status: string) {
   switch (status) {
     case "completed":
@@ -133,6 +157,14 @@ export default function MigrationsDashboardPage() {
   const [busy, setBusy] = useState(false);
   const [searchingSchools, setSearchingSchools] = useState(false);
   const [schoolFilesCode, setSchoolFilesCode] = useState("");
+  const [analyticsSort, setAnalyticsSort] = useState<SortState<AnalyticsSortColumn>>({
+    column: "school",
+    order: "asc",
+  });
+  const [activeBatchSort, setActiveBatchSort] = useState<SortState<ActiveBatchSortColumn>>({
+    column: "school",
+    order: "asc",
+  });
 
   const selectedCodes = useMemo(
     () => Object.entries(selected).filter(([, checked]) => checked).map(([code]) => code),
@@ -157,6 +189,70 @@ export default function MigrationsDashboardPage() {
       return haystack.includes(query);
     });
   }, [schools, schoolSearch]);
+
+  const sortedAnalyticsSchools = useMemo(() => {
+    if (!batchAnalytics) return [];
+
+    const rows = batchAnalytics.schools;
+    const { column, order } = analyticsSort;
+
+    switch (column) {
+      case "school":
+        return sortRows(rows, order, (row) => row.schoolCode);
+      case "status":
+        return sortRowsByStatus(rows, order, (row) => row.status);
+      case "transferred":
+        return sortRows(rows, order, (row) => row.transferred);
+      case "size":
+        return sortRows(rows, order, (row) => row.transferredBytes);
+      case "pending":
+        return sortRows(rows, order, (row) => row.pending);
+      case "failed":
+        return sortRows(rows, order, (row) => row.failed);
+      default:
+        return rows;
+    }
+  }, [batchAnalytics, analyticsSort]);
+
+  const sortedActiveBatchJobs = useMemo(() => {
+    if (!activeBatch) return [];
+
+    const rows = activeBatch.schoolJobs;
+    const { column, order } = activeBatchSort;
+
+    switch (column) {
+      case "school":
+        return sortRows(rows, order, (job) => job.schoolCode);
+      case "status":
+        return sortRowsByStatus(rows, order, (job) => job.status);
+      case "collected":
+        return sortRows(rows, order, (job) => job.collected);
+      case "transferred":
+        return sortRows(rows, order, (job) => job.transferred);
+      case "pending":
+        return sortRows(rows, order, (job) => job.pending);
+      case "failed":
+        return sortRows(rows, order, (job) => job.failed);
+      case "skipped":
+        return sortRows(rows, order, (job) => job.skipped);
+      default:
+        return rows;
+    }
+  }, [activeBatch, activeBatchSort]);
+
+  function handleAnalyticsSort(column: AnalyticsSortColumn) {
+    setAnalyticsSort((current) => ({
+      column,
+      order: current.column === column && current.order === "asc" ? "desc" : "asc",
+    }));
+  }
+
+  function handleActiveBatchSort(column: ActiveBatchSortColumn) {
+    setActiveBatchSort((current) => ({
+      column,
+      order: current.column === column && current.order === "asc" ? "desc" : "asc",
+    }));
+  }
 
   function selectAllSchools() {
     setSelected((prev) => ({
@@ -655,16 +751,55 @@ export default function MigrationsDashboardPage() {
                       <Table className="table-fixed">
                         <TableHeader>
                           <TableRow>
-                            <SchoolTableHead />
-                            <TableHead className="w-24">Status</TableHead>
-                            <TableHead className="w-32">Files transferred</TableHead>
-                            <TableHead className="w-28">Total size</TableHead>
-                            <TableHead className="w-24">Pending</TableHead>
-                            <TableHead className="w-20">Failed</TableHead>
+                            <SchoolTableHead
+                              sortActive={analyticsSort.column === "school"}
+                              sortOrder={analyticsSort.order}
+                              onSort={() => handleAnalyticsSort("school")}
+                            />
+                            <TableHead className="w-24">
+                              <TableSortButton
+                                label="Status"
+                                active={analyticsSort.column === "status"}
+                                sortOrder={analyticsSort.order}
+                                onClick={() => handleAnalyticsSort("status")}
+                              />
+                            </TableHead>
+                            <TableHead className="w-32">
+                              <TableSortButton
+                                label="Files transferred"
+                                active={analyticsSort.column === "transferred"}
+                                sortOrder={analyticsSort.order}
+                                onClick={() => handleAnalyticsSort("transferred")}
+                              />
+                            </TableHead>
+                            <TableHead className="w-28">
+                              <TableSortButton
+                                label="Total size"
+                                active={analyticsSort.column === "size"}
+                                sortOrder={analyticsSort.order}
+                                onClick={() => handleAnalyticsSort("size")}
+                              />
+                            </TableHead>
+                            <TableHead className="w-24">
+                              <TableSortButton
+                                label="Pending"
+                                active={analyticsSort.column === "pending"}
+                                sortOrder={analyticsSort.order}
+                                onClick={() => handleAnalyticsSort("pending")}
+                              />
+                            </TableHead>
+                            <TableHead className="w-20">
+                              <TableSortButton
+                                label="Failed"
+                                active={analyticsSort.column === "failed"}
+                                sortOrder={analyticsSort.order}
+                                onClick={() => handleAnalyticsSort("failed")}
+                              />
+                            </TableHead>
                           </TableRow>
                         </TableHeader>
                         <TableBody>
-                          {batchAnalytics.schools.map((school) => (
+                          {sortedAnalyticsSchools.map((school) => (
                             <TableRow key={school.schoolJobId}>
                               <SchoolTableCell
                                 schoolCode={school.schoolCode}
@@ -696,18 +831,64 @@ export default function MigrationsDashboardPage() {
                     <Table className="table-fixed">
                       <TableHeader>
                         <TableRow>
-                          <SchoolTableHead />
-                          <TableHead className="w-24">Status</TableHead>
-                          <TableHead className="w-24">Collected</TableHead>
-                          <TableHead className="w-24">Transferred</TableHead>
-                          <TableHead className="w-24">Pending</TableHead>
-                          <TableHead className="w-20">Failed</TableHead>
-                          <TableHead className="w-20">Skipped</TableHead>
+                          <SchoolTableHead
+                            sortActive={activeBatchSort.column === "school"}
+                            sortOrder={activeBatchSort.order}
+                            onSort={() => handleActiveBatchSort("school")}
+                          />
+                          <TableHead className="w-24">
+                            <TableSortButton
+                              label="Status"
+                              active={activeBatchSort.column === "status"}
+                              sortOrder={activeBatchSort.order}
+                              onClick={() => handleActiveBatchSort("status")}
+                            />
+                          </TableHead>
+                          <TableHead className="w-24">
+                            <TableSortButton
+                              label="Collected"
+                              active={activeBatchSort.column === "collected"}
+                              sortOrder={activeBatchSort.order}
+                              onClick={() => handleActiveBatchSort("collected")}
+                            />
+                          </TableHead>
+                          <TableHead className="w-24">
+                            <TableSortButton
+                              label="Transferred"
+                              active={activeBatchSort.column === "transferred"}
+                              sortOrder={activeBatchSort.order}
+                              onClick={() => handleActiveBatchSort("transferred")}
+                            />
+                          </TableHead>
+                          <TableHead className="w-24">
+                            <TableSortButton
+                              label="Pending"
+                              active={activeBatchSort.column === "pending"}
+                              sortOrder={activeBatchSort.order}
+                              onClick={() => handleActiveBatchSort("pending")}
+                            />
+                          </TableHead>
+                          <TableHead className="w-20">
+                            <TableSortButton
+                              label="Failed"
+                              active={activeBatchSort.column === "failed"}
+                              sortOrder={activeBatchSort.order}
+                              onClick={() => handleActiveBatchSort("failed")}
+                            />
+                          </TableHead>
+                          <TableHead className="w-20">
+                            <TableSortButton
+                              label="Skipped"
+                              active={activeBatchSort.column === "skipped"}
+                              sortOrder={activeBatchSort.order}
+                              onClick={() => handleActiveBatchSort("skipped")}
+                            />
+                          </TableHead>
                           <TableHead className="w-20">Logs</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {activeBatch.schoolJobs.map((job) => (
+                        {sortedActiveBatchJobs.map((job) => (
                           <TableRow key={job.id}>
                             <SchoolTableCell
                               schoolCode={job.schoolCode}

@@ -73,7 +73,7 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
       .where(
         and(
           eq(migrationSchoolJobs.batchId, id),
-          eq(migrationSchoolJobs.status, "paused"),
+          sql`${migrationSchoolJobs.status} in ('paused', 'failed')`,
         ),
       );
   }

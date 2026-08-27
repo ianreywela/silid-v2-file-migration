@@ -1,14 +1,34 @@
 import { TableCell, TableHead } from "@/components/ui/table";
+import { TableSortButton } from "@/components/table-sort-button";
 
 export const SCHOOL_COLUMN_CLASS = "w-[220px] max-w-[220px]";
 
 type SchoolTableHeadProps = {
   className?: string;
+  sortActive?: boolean;
+  sortOrder?: "asc" | "desc";
+  onSort?: () => void;
 };
 
-export function SchoolTableHead({ className }: SchoolTableHeadProps) {
+export function SchoolTableHead({
+  className,
+  sortActive = false,
+  sortOrder = "asc",
+  onSort,
+}: SchoolTableHeadProps) {
   return (
-    <TableHead className={className ?? SCHOOL_COLUMN_CLASS}>School</TableHead>
+    <TableHead className={className ?? SCHOOL_COLUMN_CLASS}>
+      {onSort ? (
+        <TableSortButton
+          label="School"
+          active={sortActive}
+          sortOrder={sortOrder}
+          onClick={onSort}
+        />
+      ) : (
+        "School"
+      )}
+    </TableHead>
   );
 }
 

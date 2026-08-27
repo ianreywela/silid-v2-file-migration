@@ -8,6 +8,7 @@ import {
   getPendingSchoolJobs,
   getRunnableBatches,
   isBatchComplete,
+  reconcilePausedSchoolJobs,
   setBatchStatus,
 } from "@/lib/migration/repository";
 
@@ -31,6 +32,8 @@ async function processBatch(batchId: string, concurrency: number) {
     if (batch.status === "queued") {
       await setBatchStatus(batchId, "running");
     }
+
+    await reconcilePausedSchoolJobs(batchId);
 
     const schoolJobs = await getPendingSchoolJobs(batchId);
     if (schoolJobs.length === 0) {
