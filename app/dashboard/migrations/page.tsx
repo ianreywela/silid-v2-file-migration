@@ -463,6 +463,10 @@ export default function MigrationsDashboardPage() {
             </CardContent>
           </Card>
 
+          <Button className="w-full" onClick={handleStartMigration} disabled={busy}>
+            Start migration (5 parallel schools)
+          </Button>
+
           <Card>
             <CardHeader>
               <CardTitle>Collected files by school</CardTitle>
@@ -497,10 +501,6 @@ export default function MigrationsDashboardPage() {
               </Link>
             </CardContent>
           </Card>
-
-          <Button className="w-full" onClick={handleStartMigration} disabled={busy}>
-            Start migration (5 parallel schools)
-          </Button>
         </div>
 
         <div className="space-y-6">
