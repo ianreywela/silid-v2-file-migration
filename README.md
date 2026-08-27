@@ -1,36 +1,111 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Silid V2 File Migration
 
-## Getting Started
+Next.js dashboard and background worker for migrating files from AWS S3 to Huawei OBS. Schools are discovered from Firestore by class creation date range. Migration progress is stored in PostgreSQL (replacing per-school JSON ledger files).
 
-First, run the development server:
+## Stack
+
+- Next.js (App Router)
+- Drizzle ORM + PostgreSQL
+- NextAuth with Google OAuth (dashboard) + Firebase Admin (Firestore reads)
+- Background worker (`npm run worker`) with 5 parallel school migrations
+
+## Prerequisites
+
+- Node.js 20+
+- PostgreSQL database (`DATABASE_URL`)
+- Firebase service account credentials
+- AWS S3 and Huawei OBS credentials (see `.env.example`)
+
+## Setup
+
+1. Copy environment variables:
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+cp .env.example .env
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+2. Set `DATABASE_URL` in `.env` to your Postgres connection string.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+3. Push database schema:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+npm run db:push
+```
 
-## Learn More
+If you already ran migrations before, apply the latest schema update for transfer analytics (`file_size_bytes`, `transferred_bytes` columns).
 
-To learn more about Next.js, take a look at the following resources:
+4. Install dependencies and run the app:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```bash
+npm install
+npm run dev
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+5. Migrations run automatically on the server when you start the app (`npm run dev` or `npm start`). No separate worker terminal is required unless you set `DISABLE_EMBEDDED_WORKER=true`.
 
-## Deploy on Vercel
+The worker continues processing after you reload the page or sign out.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Usage
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+1. Sign in at `/login` with Google OAuth.
+2. Open `/dashboard/migrations`.
+3. Set start/end dates and search schools (matches `getSchools` in silid-functions).
+4. Select schools and start migration.
+5. Use Pause / Resume / Cancel to control the active batch.
+6. View per-school progress and logs in the dashboard.
+
+## Import existing JSON ledgers
+
+To seed progress from Python `exports/obs_file_migration_data/*.json`:
+
+```bash
+npm run import:ledgers -- /path/to/obs_file_migration_data <batch-id>
+```
+
+## Production
+
+Run two processes:
+
+1. `npm run build && npm start` — web UI + API
+2. `npm run worker` — migration processor (PM2 or systemd recommended)
+
+## API
+
+| Method | Route | Description |
+|--------|-------|-------------|
+| GET | `/api/schools?startDate&endDate` | Schools in date range |
+| POST | `/api/migrations` | Create migration batch |
+| GET | `/api/migrations` | List batches |
+| GET | `/api/migrations/[id]` | Batch detail |
+| PATCH | `/api/migrations/[id]` | `{ action: "pause" \| "resume" \| "cancel" }` |
+| GET | `/api/migrations/[id]/files` | Collected files with filter, sort, pagination |
+| GET | `/api/migrations/[id]/analytics` | Per-school and overall transfer size stats |
+| GET | `/api/migrations/[id]/logs?schoolJobId` | School logs |
+
+All API routes require an active NextAuth session (cookie-based).
+
+## Google OAuth setup
+
+1. Create an OAuth client in [Google Cloud Console](https://console.cloud.google.com/apis/credentials).
+2. Set **Authorized redirect URIs** to:
+   - `http://localhost:3000/api/auth/callback/google` (local)
+   - `https://your-domain.com/api/auth/callback/google` (production)
+3. Copy the client ID and secret into `.env` as `OAUTH_CLIENT_ID` and `OAUTH_CLIENT_SECRET`.
+4. Set `AUTH_URL` to your app origin (e.g. `http://localhost:3000`).
+5. Generate `AUTH_SECRET` with `openssl rand -base64 32`.
+
+## Storage credentials
+
+File transfers copy objects directly from AWS S3 to Huawei OBS using the S3-compatible API (same approach as `silid-file-uploader`). Set these in `.env`:
+
+| Variable | Description |
+|----------|-------------|
+| `AWS_ACCESS_ID` | AWS access key |
+| `AWS_SECRET_KEY_ID` | AWS secret key |
+| `AWS_BUCKET` | Source bucket |
+| `AWS_REGION` | AWS region (e.g. `ap-southeast-1`) |
+| `HUAWEI_AWS_ACCESS_ID` | Huawei OBS access key |
+| `HUAWEI_AWS_SECRET_KEY_ID` | Huawei OBS secret key |
+| `HUAWEI_AWS_BUCKET` | Destination bucket |
+| `HUAWEI_AWS_REGION` | Huawei region |
+| `HUAWEI_AWS_ENDPOINT` | Huawei OBS S3 endpoint (virtual-hosted style) |
