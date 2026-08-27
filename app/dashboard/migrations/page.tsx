@@ -70,6 +70,7 @@ type BatchAnalytics = {
     totalSkippedFiles: number;
     totalFailedFiles: number;
     totalPendingFiles: number;
+    totalSizeBytes: number;
     totalTransferredBytes: number;
     schoolCount: number;
   };
@@ -82,6 +83,7 @@ type BatchAnalytics = {
     skipped: number;
     failed: number;
     pending: number;
+    totalBytes: number;
     transferredBytes: number;
   }[];
 };
@@ -204,7 +206,7 @@ export default function MigrationsDashboardPage() {
       case "transferred":
         return sortRows(rows, order, (row) => row.transferred);
       case "size":
-        return sortRows(rows, order, (row) => row.transferredBytes);
+        return sortRows(rows, order, (row) => row.totalBytes);
       case "pending":
         return sortRows(rows, order, (row) => row.pending);
       case "failed":
@@ -401,7 +403,7 @@ export default function MigrationsDashboardPage() {
     }
   }
 
-  async function handleBatchAction(action: "pause" | "resume" | "cancel") {
+  async function handleBatchAction(action: "pause" | "resume" | "cancel" | "rerun") {
     if (!activeBatch) return;
     setBusy(true);
     try {
@@ -412,13 +414,26 @@ export default function MigrationsDashboardPage() {
       await loadBatchDetail(activeBatch.batch.id);
       await loadBatchAnalytics(activeBatch.batch.id);
       await refreshBatchHistory();
-      setMessage(`Batch ${action}d`);
+      setMessage(
+        action === "rerun"
+          ? "Re-running failed school migrations"
+          : action === "cancel"
+            ? "Batch cancelled"
+            : action === "pause"
+              ? "Batch paused"
+              : "Batch resumed",
+      );
     } catch (error) {
       setMessage(error instanceof Error ? error.message : `Failed to ${action} batch`);
     } finally {
       setBusy(false);
     }
   }
+
+  const hasFailedSchools = useMemo(
+    () => activeBatch?.schoolJobs.some((job) => job.status === "failed") ?? false,
+    [activeBatch?.schoolJobs],
+  );
 
   if (status === "loading") {
     return (
@@ -599,7 +614,7 @@ export default function MigrationsDashboardPage() {
           </Card>
         </div>
 
-        <div className="space-y-6">
+        <div className="min-w-0 space-y-6">
           {message ? (
             <div className="glass-panel px-4 py-3 text-sm">{message}</div>
           ) : null}
@@ -690,6 +705,14 @@ export default function MigrationsDashboardPage() {
                         Resume
                       </Button>
                       <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleBatchAction("rerun")}
+                        disabled={busy || !hasFailedSchools}
+                      >
+                        Re-run failed
+                      </Button>
+                      <Button
                         variant="destructive"
                         size="sm"
                         onClick={() => handleBatchAction("cancel")}
@@ -718,7 +741,7 @@ export default function MigrationsDashboardPage() {
                           Total size
                         </p>
                         <p className="mt-1 text-2xl font-semibold">
-                          {formatBytes(batchAnalytics.overall.totalTransferredBytes)}
+                          {formatBytes(batchAnalytics.overall.totalSizeBytes)}
                         </p>
                       </div>
                       <div className="glass-stat">
@@ -774,7 +797,7 @@ export default function MigrationsDashboardPage() {
                             </TableHead>
                             <TableHead className="w-28">
                               <TableSortButton
-                                label="Total size"
+                                label="File size"
                                 active={analyticsSort.column === "size"}
                                 sortOrder={analyticsSort.order}
                                 onClick={() => handleAnalyticsSort("size")}
@@ -810,7 +833,7 @@ export default function MigrationsDashboardPage() {
                               </TableCell>
                               <TableCell>{school.transferred.toLocaleString()}</TableCell>
                               <TableCell className="font-medium">
-                                {formatBytes(school.transferredBytes)}
+                                {formatBytes(school.totalBytes)}
                               </TableCell>
                               <TableCell>{school.pending.toLocaleString()}</TableCell>
                               <TableCell>{school.failed.toLocaleString()}</TableCell>
@@ -928,7 +951,7 @@ export default function MigrationsDashboardPage() {
                   </div>
 
                   {expandedJobId ? (
-                    <div className="space-y-2">
+                    <div className="min-w-0 w-full max-w-full space-y-2">
                       <p className="text-sm font-medium text-foreground/90">Migration Logs</p>
                       <TerminalLogViewer
                         title={`${activeBatch.schoolJobs.find((job) => job.id === expandedJobId)?.schoolCode ?? "school"}.log`}

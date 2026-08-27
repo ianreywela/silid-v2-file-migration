@@ -1,4 +1,4 @@
-import { eq, and, sql, desc } from "drizzle-orm";
+import { eq, and, sql, desc, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   migrationBatches,
@@ -30,7 +30,53 @@ export async function updateSchoolJob(
     .where(eq(migrationSchoolJobs.id, schoolJobId));
 }
 
-export async function upsertFilePaths(schoolJobId: string, folderPaths: string[]) {
+export type TransferredPathRecord = {
+  filePath: string;
+  fileSizeBytes: number | null;
+  transferredAt: Date | null;
+};
+
+export async function getTransferredPathIndexForSchool(
+  schoolCode: string,
+): Promise<Map<string, TransferredPathRecord>> {
+  const rows = await db
+    .select({
+      filePath: migrationFilePaths.filePath,
+      fileSizeBytes: migrationFilePaths.fileSizeBytes,
+      transferredAt: migrationFilePaths.transferredAt,
+    })
+    .from(migrationFilePaths)
+    .innerJoin(
+      migrationSchoolJobs,
+      eq(migrationFilePaths.schoolJobId, migrationSchoolJobs.id),
+    )
+    .where(
+      and(
+        eq(migrationSchoolJobs.schoolCode, schoolCode),
+        eq(migrationFilePaths.status, "transferred"),
+      ),
+    );
+
+  const index = new Map<string, TransferredPathRecord>();
+  for (const row of rows) {
+    if (!index.has(row.filePath)) {
+      index.set(row.filePath, {
+        filePath: row.filePath,
+        fileSizeBytes: row.fileSizeBytes == null ? null : Number(row.fileSizeBytes),
+        transferredAt: row.transferredAt,
+      });
+    }
+  }
+
+  return index;
+}
+
+export async function upsertFilePaths(
+  schoolJobId: string,
+  schoolCode: string,
+  folderPaths: string[],
+  transferredIndex?: Map<string, TransferredPathRecord>,
+) {
   if (folderPaths.length === 0) return;
 
   const existing = await db
@@ -39,13 +85,29 @@ export async function upsertFilePaths(schoolJobId: string, folderPaths: string[]
     .where(eq(migrationFilePaths.schoolJobId, schoolJobId));
 
   const existingMap = new Map(existing.map((row) => [row.filePath, row.status]));
-  const toInsert = folderPaths
-    .filter((path) => !existingMap.has(path))
-    .map((filePath) => ({ schoolJobId, filePath, status: "pending" as const }));
+  const newPaths = folderPaths.filter((path) => !existingMap.has(path));
+  if (newPaths.length === 0) return;
+
+  const priorTransfers = transferredIndex ?? (await getTransferredPathIndexForSchool(schoolCode));
+
+  const toInsert = newPaths.map((filePath) => {
+    const prior = priorTransfers.get(filePath);
+    if (prior) {
+      return {
+        schoolJobId,
+        filePath,
+        status: "transferred" as const,
+        fileSizeBytes: prior.fileSizeBytes,
+        transferredAt: prior.transferredAt ?? new Date(),
+      };
+    }
+
+    return { schoolJobId, filePath, status: "pending" as const };
+  });
 
   const INSERT_BATCH_SIZE = 500;
-  for (let index = 0; index < toInsert.length; index += INSERT_BATCH_SIZE) {
-    const batch = toInsert.slice(index, index + INSERT_BATCH_SIZE);
+  for (let offset = 0; offset < toInsert.length; offset += INSERT_BATCH_SIZE) {
+    const batch = toInsert.slice(offset, offset + INSERT_BATCH_SIZE);
     if (batch.length === 0) continue;
     await db.insert(migrationFilePaths).values(batch).onConflictDoNothing();
   }
@@ -139,6 +201,45 @@ export async function reconcilePausedSchoolJobs(batchId: string) {
         eq(migrationSchoolJobs.status, "paused"),
       ),
     );
+}
+
+export async function rerunFailedSchoolJobs(batchId: string) {
+  const failedJobs = await db
+    .select({ id: migrationSchoolJobs.id })
+    .from(migrationSchoolJobs)
+    .where(
+      and(
+        eq(migrationSchoolJobs.batchId, batchId),
+        eq(migrationSchoolJobs.status, "failed"),
+      ),
+    );
+
+  if (failedJobs.length === 0) {
+    return 0;
+  }
+
+  const failedJobIds = failedJobs.map((job) => job.id);
+
+  await db
+    .update(migrationFilePaths)
+    .set({
+      status: "pending",
+      errorMessage: null,
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        inArray(migrationFilePaths.schoolJobId, failedJobIds),
+        eq(migrationFilePaths.status, "failed"),
+      ),
+    );
+
+  await db
+    .update(migrationSchoolJobs)
+    .set({ status: "pending", updatedAt: new Date() })
+    .where(inArray(migrationSchoolJobs.id, failedJobIds));
+
+  return failedJobs.length;
 }
 
 export async function getPendingSchoolJobs(batchId: string) {

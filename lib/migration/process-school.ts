@@ -5,6 +5,7 @@ import {
   countFilePathsForSchoolJob,
   getBatchStatus,
   getPendingFilePaths,
+  getTransferredPathIndexForSchool,
   markFilePath,
   refreshSchoolJobCounts,
   updateSchoolJob,
@@ -53,6 +54,7 @@ export async function processSchoolJob(job: MigrationSchoolJob): Promise<void> {
     return;
   }
 
+  const transferredIndex = await getTransferredPathIndexForSchool(schoolCode);
   const collectedFileCount = await countFilePathsForSchoolJob(schoolJobId);
   const shouldCollect = collectedFileCount === 0;
 
@@ -77,14 +79,20 @@ export async function processSchoolJob(job: MigrationSchoolJob): Promise<void> {
       classCount: collection.classCount,
     });
 
-    await upsertFilePaths(schoolJobId, collection.folderPaths);
+    await upsertFilePaths(
+      schoolJobId,
+      schoolCode,
+      collection.folderPaths,
+      transferredIndex,
+    );
     await refreshSchoolJobCounts(schoolJobId);
 
     const pendingBefore = await getPendingFilePaths(schoolJobId);
+    const skippedExisting = collection.folderPaths.length - pendingBefore.length;
     await appendLog(
       schoolJobId,
       "JSON",
-      `collected=${collection.folderPaths.length} pending=${pendingBefore.length}`,
+      `collected=${collection.folderPaths.length} pending=${pendingBefore.length} already_transferred=${skippedExisting}`,
     );
   } else {
     await updateSchoolJob(schoolJobId, {
@@ -126,6 +134,23 @@ export async function processSchoolJob(job: MigrationSchoolJob): Promise<void> {
       return;
     }
 
+    const priorTransfer = transferredIndex.get(file.filePath);
+    if (priorTransfer) {
+      await markFilePath(
+        file.id,
+        "transferred",
+        undefined,
+        priorTransfer.fileSizeBytes ?? undefined,
+      );
+      await appendLog(
+        schoolJobId,
+        "SKIP",
+        `${file.filePath} | already transferred (skipped upload)`,
+      );
+      await refreshSchoolJobCounts(schoolJobId);
+      continue;
+    }
+
     await appendLog(
       schoolJobId,
       "TRANSFER",
@@ -138,6 +163,11 @@ export async function processSchoolJob(job: MigrationSchoolJob): Promise<void> {
       if (result.ok) {
         const size = Number(result.body.size ?? 0);
         await markFilePath(file.id, "transferred", undefined, size);
+        transferredIndex.set(file.filePath, {
+          filePath: file.filePath,
+          fileSizeBytes: size > 0 ? size : null,
+          transferredAt: new Date(),
+        });
         await appendLog(
           schoolJobId,
           "OK",

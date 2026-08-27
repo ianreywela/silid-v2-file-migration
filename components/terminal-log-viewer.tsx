@@ -88,7 +88,7 @@ export function TerminalLogViewer({
   }, [logs]);
 
   return (
-    <div className="relative overflow-hidden rounded-2xl border border-white/20 bg-black/35 shadow-[0_12px_40px_rgba(0,0,0,0.35)] backdrop-blur-xl">
+    <div className="relative w-full min-w-0 max-w-full overflow-hidden rounded-2xl border border-white/20 bg-black/35 shadow-[0_12px_40px_rgba(0,0,0,0.35)] backdrop-blur-xl">
       <div className="flex items-center justify-between border-b border-white/10 bg-white/8 px-4 py-2.5 backdrop-blur-md">
         <div className="flex items-center gap-2">
           <span className="h-3 w-3 rounded-full bg-[#ff5f57]" />
@@ -105,7 +105,7 @@ export function TerminalLogViewer({
       <div
         ref={scrollRef}
         onScroll={handleScroll}
-        className="glass-scrollbar max-h-96 overflow-x-hidden overflow-y-auto px-4 py-3 font-mono text-[13px] leading-6 text-white/90"
+        className="glass-scrollbar max-h-96 w-full min-w-0 overflow-x-hidden overflow-y-auto px-4 py-3 font-mono text-[13px] leading-6 text-white/90"
       >
         {logs.length === 0 ? (
           <p className="text-white/40">{emptyMessage}</p>
