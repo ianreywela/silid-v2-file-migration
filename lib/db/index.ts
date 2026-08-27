@@ -11,7 +11,7 @@ function getClient() {
     if (!connectionString) {
       throw new Error("DATABASE_URL is not set");
     }
-    client = postgres(connectionString, { max: 10 });
+    client = postgres(connectionString, { max: 10000 });
   }
   return client;
 }

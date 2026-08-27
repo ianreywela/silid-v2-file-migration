@@ -43,8 +43,11 @@ export async function upsertFilePaths(schoolJobId: string, folderPaths: string[]
     .filter((path) => !existingMap.has(path))
     .map((filePath) => ({ schoolJobId, filePath, status: "pending" as const }));
 
-  if (toInsert.length > 0) {
-    await db.insert(migrationFilePaths).values(toInsert).onConflictDoNothing();
+  const INSERT_BATCH_SIZE = 500;
+  for (let index = 0; index < toInsert.length; index += INSERT_BATCH_SIZE) {
+    const batch = toInsert.slice(index, index + INSERT_BATCH_SIZE);
+    if (batch.length === 0) continue;
+    await db.insert(migrationFilePaths).values(batch).onConflictDoNothing();
   }
 }
 

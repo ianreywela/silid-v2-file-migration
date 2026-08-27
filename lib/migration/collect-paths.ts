@@ -20,6 +20,15 @@ export type CollectResult = {
   folderPaths: string[];
 };
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
 function isFirebaseStorageUrl(value: string): boolean {
   return FIREBASE_STORAGE_MARKERS.some((marker) => value.includes(marker));
 }
@@ -38,24 +47,27 @@ function keyFromAwsUrl(url: string): string | null {
   }
 }
 
-function extractKeysFromValue(value: unknown, out: Set<string>): void {
+function extractKeysFromValue(value: unknown, out: Set<string>, seen = new WeakSet<object>()): void {
   if (value == null) return;
 
-  if (typeof value === "object" && !Array.isArray(value)) {
-    const record = value as Record<string, unknown>;
-    const folderName = record.folderName;
+  if (isPlainObject(value)) {
+    if (seen.has(value)) return;
+    seen.add(value);
+
+    const folderName = value.folderName;
     if (typeof folderName === "string" && folderName.trim()) {
       const key = folderName.trim().replace(/^\/+/, "");
       if (key && !isFirebaseStorageUrl(key)) out.add(key);
     }
-    for (const nested of Object.values(record)) {
-      extractKeysFromValue(nested, out);
+
+    for (const nested of Object.values(value)) {
+      extractKeysFromValue(nested, out, seen);
     }
     return;
   }
 
   if (Array.isArray(value)) {
-    for (const item of value) extractKeysFromValue(item, out);
+    for (const item of value) extractKeysFromValue(item, out, seen);
     return;
   }
 
