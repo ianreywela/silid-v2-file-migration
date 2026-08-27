@@ -157,6 +157,10 @@
     @apply border-white/35 bg-white/16 shadow-[inset_0_1px_0_rgba(255,255,255,0.18)];
   }
 
+  .glass-table-row-active {
+    @apply border-white/30 bg-white/16 shadow-[inset_0_1px_0_rgba(255,255,255,0.14)];
+  }
+
   .glass-input {
     @apply border-white/20 bg-[#12102a]/70 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] backdrop-blur-md placeholder:text-white/45 focus-visible:border-white/35 focus-visible:ring-white/20;
     color-scheme: dark;

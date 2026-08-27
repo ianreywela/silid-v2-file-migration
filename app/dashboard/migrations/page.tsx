@@ -715,7 +715,7 @@ export default function MigrationsDashboardPage() {
                     <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                       <div className="glass-stat">
                         <p className="text-xs uppercase tracking-wide text-muted-foreground">
-                          Total transferred
+                          Total size
                         </p>
                         <p className="mt-1 text-2xl font-semibold">
                           {formatBytes(batchAnalytics.overall.totalTransferredBytes)}
@@ -888,8 +888,15 @@ export default function MigrationsDashboardPage() {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {sortedActiveBatchJobs.map((job) => (
-                          <TableRow key={job.id}>
+                        {sortedActiveBatchJobs.map((job) => {
+                          const isViewing = expandedJobId === job.id;
+
+                          return (
+                          <TableRow
+                            key={job.id}
+                            data-state={isViewing ? "selected" : undefined}
+                            className={cn(isViewing && "glass-table-row-active")}
+                          >
                             <SchoolTableCell
                               schoolCode={job.schoolCode}
                               schoolName={job.schoolName}
@@ -904,17 +911,18 @@ export default function MigrationsDashboardPage() {
                             <TableCell>{job.skipped}</TableCell>
                             <TableCell>
                               <Button
-                                variant="ghost"
+                                variant={isViewing ? "secondary" : "ghost"}
                                 size="sm"
                                 onClick={() =>
-                                  setExpandedJobId(expandedJobId === job.id ? null : job.id)
+                                  setExpandedJobId(isViewing ? null : job.id)
                                 }
                               >
-                                {expandedJobId === job.id ? "Hide" : "View"}
+                                {isViewing ? "Hide" : "View"}
                               </Button>
                             </TableCell>
                           </TableRow>
-                        ))}
+                          );
+                        })}
                       </TableBody>
                     </Table>
                   </div>
