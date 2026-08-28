@@ -918,7 +918,10 @@ export default function MigrationsDashboardPage() {
                           <TableRow
                             key={job.id}
                             data-state={isViewing ? "selected" : undefined}
-                            className={cn(isViewing && "glass-table-row-active")}
+                            className={cn(isViewing && "glass-table-row-active", "cursor-pointer")}
+                            onClick={() =>
+                              setExpandedJobId(isViewing ? null : job.id)
+                            }
                           >
                             <SchoolTableCell
                               schoolCode={job.schoolCode}
