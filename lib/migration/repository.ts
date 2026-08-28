@@ -36,6 +36,50 @@ export type TransferredPathRecord = {
   transferredAt: Date | null;
 };
 
+export async function lookupTransferredPaths(
+  schoolCode: string,
+  filePaths: string[],
+): Promise<Map<string, TransferredPathRecord>> {
+  const index = new Map<string, TransferredPathRecord>();
+  if (filePaths.length === 0) return index;
+
+  const LOOKUP_BATCH_SIZE = 500;
+  for (let offset = 0; offset < filePaths.length; offset += LOOKUP_BATCH_SIZE) {
+    const chunk = filePaths.slice(offset, offset + LOOKUP_BATCH_SIZE);
+    const rows = await db
+      .select({
+        filePath: migrationFilePaths.filePath,
+        fileSizeBytes: migrationFilePaths.fileSizeBytes,
+        transferredAt: migrationFilePaths.transferredAt,
+      })
+      .from(migrationFilePaths)
+      .innerJoin(
+        migrationSchoolJobs,
+        eq(migrationFilePaths.schoolJobId, migrationSchoolJobs.id),
+      )
+      .where(
+        and(
+          eq(migrationSchoolJobs.schoolCode, schoolCode),
+          eq(migrationFilePaths.status, "transferred"),
+          inArray(migrationFilePaths.filePath, chunk),
+        ),
+      );
+
+    for (const row of rows) {
+      if (!index.has(row.filePath)) {
+        index.set(row.filePath, {
+          filePath: row.filePath,
+          fileSizeBytes: row.fileSizeBytes == null ? null : Number(row.fileSizeBytes),
+          transferredAt: row.transferredAt,
+        });
+      }
+    }
+  }
+
+  return index;
+}
+
+/** @deprecated Use lookupTransferredPaths in batches instead. */
 export async function getTransferredPathIndexForSchool(
   schoolCode: string,
 ): Promise<Map<string, TransferredPathRecord>> {
@@ -71,26 +115,17 @@ export async function getTransferredPathIndexForSchool(
   return index;
 }
 
-export async function upsertFilePaths(
+const UPSERT_BATCH_SIZE = 500;
+
+async function insertFilePathBatch(
   schoolJobId: string,
   schoolCode: string,
-  folderPaths: string[],
-  transferredIndex?: Map<string, TransferredPathRecord>,
-) {
-  if (folderPaths.length === 0) return;
+  paths: string[],
+): Promise<void> {
+  if (paths.length === 0) return;
 
-  const existing = await db
-    .select({ filePath: migrationFilePaths.filePath, status: migrationFilePaths.status })
-    .from(migrationFilePaths)
-    .where(eq(migrationFilePaths.schoolJobId, schoolJobId));
-
-  const existingMap = new Map(existing.map((row) => [row.filePath, row.status]));
-  const newPaths = folderPaths.filter((path) => !existingMap.has(path));
-  if (newPaths.length === 0) return;
-
-  const priorTransfers = transferredIndex ?? (await getTransferredPathIndexForSchool(schoolCode));
-
-  const toInsert = newPaths.map((filePath) => {
+  const priorTransfers = await lookupTransferredPaths(schoolCode, paths);
+  const toInsert = paths.map((filePath) => {
     const prior = priorTransfers.get(filePath);
     if (prior) {
       return {
@@ -105,12 +140,44 @@ export async function upsertFilePaths(
     return { schoolJobId, filePath, status: "pending" as const };
   });
 
-  const INSERT_BATCH_SIZE = 500;
-  for (let offset = 0; offset < toInsert.length; offset += INSERT_BATCH_SIZE) {
-    const batch = toInsert.slice(offset, offset + INSERT_BATCH_SIZE);
-    if (batch.length === 0) continue;
-    await db.insert(migrationFilePaths).values(batch).onConflictDoNothing();
+  await db.insert(migrationFilePaths).values(toInsert).onConflictDoNothing();
+}
+
+export async function upsertFilePathsFromSet(
+  schoolJobId: string,
+  schoolCode: string,
+  paths: Set<string>,
+): Promise<number> {
+  if (paths.size === 0) return 0;
+
+  let batch: string[] = [];
+  let inserted = 0;
+
+  for (const filePath of paths) {
+    batch.push(filePath);
+    if (batch.length >= UPSERT_BATCH_SIZE) {
+      await insertFilePathBatch(schoolJobId, schoolCode, batch);
+      inserted += batch.length;
+      batch = [];
+    }
   }
+
+  if (batch.length > 0) {
+    await insertFilePathBatch(schoolJobId, schoolCode, batch);
+    inserted += batch.length;
+  }
+
+  return inserted;
+}
+
+export async function upsertFilePaths(
+  schoolJobId: string,
+  schoolCode: string,
+  folderPaths: string[],
+  _transferredIndex?: Map<string, TransferredPathRecord>,
+) {
+  if (folderPaths.length === 0) return;
+  await upsertFilePathsFromSet(schoolJobId, schoolCode, new Set(folderPaths));
 }
 
 export async function refreshSchoolJobCounts(schoolJobId: string) {
@@ -136,6 +203,37 @@ export async function refreshSchoolJobCounts(schoolJobId: string) {
     pending: counts.pending,
     transferredBytes: counts.transferredBytes,
   });
+}
+
+export async function countPendingFilePaths(schoolJobId: string): Promise<number> {
+  const [row] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(migrationFilePaths)
+    .where(
+      and(
+        eq(migrationFilePaths.schoolJobId, schoolJobId),
+        eq(migrationFilePaths.status, "pending"),
+      ),
+    );
+
+  return row?.count ?? 0;
+}
+
+export async function getPendingFilePathsPage(schoolJobId: string, limit = 100) {
+  return db
+    .select({
+      id: migrationFilePaths.id,
+      filePath: migrationFilePaths.filePath,
+    })
+    .from(migrationFilePaths)
+    .where(
+      and(
+        eq(migrationFilePaths.schoolJobId, schoolJobId),
+        eq(migrationFilePaths.status, "pending"),
+      ),
+    )
+    .orderBy(migrationFilePaths.createdAt)
+    .limit(limit);
 }
 
 export async function getPendingFilePaths(schoolJobId: string) {

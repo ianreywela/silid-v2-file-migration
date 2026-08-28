@@ -3,18 +3,20 @@ import { transferFile } from "@/lib/migration/transfer-file";
 import {
   appendLog,
   countFilePathsForSchoolJob,
+  countPendingFilePaths,
   getBatchStatus,
-  getPendingFilePaths,
-  getTransferredPathIndexForSchool,
+  getPendingFilePathsPage,
+  lookupTransferredPaths,
   markFilePath,
   refreshSchoolJobCounts,
   updateSchoolJob,
-  upsertFilePaths,
+  upsertFilePathsFromSet,
 } from "@/lib/migration/repository";
 import type { MigrationSchoolJob } from "@/drizzle/schema";
 
 const BATCH_STATUS_RETRIES = 5;
 const BATCH_STATUS_RETRY_MS = 500;
+const PENDING_PAGE_SIZE = 100;
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -54,7 +56,6 @@ export async function processSchoolJob(job: MigrationSchoolJob): Promise<void> {
     return;
   }
 
-  const transferredIndex = await getTransferredPathIndexForSchool(schoolCode);
   const collectedFileCount = await countFilePathsForSchoolJob(schoolJobId);
   const shouldCollect = collectedFileCount === 0;
 
@@ -79,20 +80,16 @@ export async function processSchoolJob(job: MigrationSchoolJob): Promise<void> {
       classCount: collection.classCount,
     });
 
-    await upsertFilePaths(
-      schoolJobId,
-      schoolCode,
-      collection.folderPaths,
-      transferredIndex,
-    );
+    const collected = collection.pathKeys.size;
+    await upsertFilePathsFromSet(schoolJobId, schoolCode, collection.pathKeys);
     await refreshSchoolJobCounts(schoolJobId);
 
-    const pendingBefore = await getPendingFilePaths(schoolJobId);
-    const skippedExisting = collection.folderPaths.length - pendingBefore.length;
+    const pending = await countPendingFilePaths(schoolJobId);
+    const skippedExisting = collected - pending;
     await appendLog(
       schoolJobId,
       "JSON",
-      `collected=${collection.folderPaths.length} pending=${pendingBefore.length} already_transferred=${skippedExisting}`,
+      `collected=${collected} pending=${pending} already_transferred=${skippedExisting}`,
     );
   } else {
     await updateSchoolJob(schoolJobId, {
@@ -109,8 +106,8 @@ export async function processSchoolJob(job: MigrationSchoolJob): Promise<void> {
     await refreshSchoolJobCounts(schoolJobId);
   }
 
-  const pendingBeforeTransfer = await getPendingFilePaths(schoolJobId);
-  if (pendingBeforeTransfer.length === 0) {
+  const pendingTotal = await countPendingFilePaths(schoolJobId);
+  if (pendingTotal === 0) {
     await updateSchoolJob(schoolJobId, {
       status: "completed",
       completedAt: new Date(),
@@ -121,78 +118,83 @@ export async function processSchoolJob(job: MigrationSchoolJob): Promise<void> {
 
   await updateSchoolJob(schoolJobId, { status: "transferring" });
 
-  const pendingFiles = await getPendingFilePaths(schoolJobId);
-  let index = 0;
+  let processed = 0;
 
-  for (const file of pendingFiles) {
-    index += 1;
-
-    const batchStatus = await getBatchStatus(batchId);
-    if (!batchStatus || batchStatus === "paused" || batchStatus === "cancelled") {
-      await updateSchoolJob(schoolJobId, { status: "paused" });
-      await appendLog(schoolJobId, "PAUSE", "batch paused or cancelled");
-      return;
+  while (true) {
+    const pendingBatch = await getPendingFilePathsPage(schoolJobId, PENDING_PAGE_SIZE);
+    if (pendingBatch.length === 0) {
+      break;
     }
 
-    const priorTransfer = transferredIndex.get(file.filePath);
-    if (priorTransfer) {
-      await markFilePath(
-        file.id,
-        "transferred",
-        undefined,
-        priorTransfer.fileSizeBytes ?? undefined,
-      );
-      await appendLog(
-        schoolJobId,
-        "SKIP",
-        `${file.filePath} | already transferred (skipped upload)`,
-      );
-      await refreshSchoolJobCounts(schoolJobId);
-      continue;
-    }
-
-    await appendLog(
-      schoolJobId,
-      "TRANSFER",
-      `[${index}/${pendingFiles.length}] ${file.filePath}`,
+    const priorTransfers = await lookupTransferredPaths(
+      schoolCode,
+      pendingBatch.map((file) => file.filePath),
     );
 
-    try {
-      const result = await transferFile(file.filePath);
+    for (const file of pendingBatch) {
+      processed += 1;
 
-      if (result.ok) {
-        const size = Number(result.body.size ?? 0);
-        await markFilePath(file.id, "transferred", undefined, size);
-        transferredIndex.set(file.filePath, {
-          filePath: file.filePath,
-          fileSizeBytes: size > 0 ? size : null,
-          transferredAt: new Date(),
-        });
-        await appendLog(
-          schoolJobId,
-          "OK",
-          size > 0 ? `${file.filePath} (${size} bytes)` : file.filePath,
+      const batchStatus = await getBatchStatus(batchId);
+      if (!batchStatus || batchStatus === "paused" || batchStatus === "cancelled") {
+        await updateSchoolJob(schoolJobId, { status: "paused" });
+        await appendLog(schoolJobId, "PAUSE", "batch paused or cancelled");
+        return;
+      }
+
+      const priorTransfer = priorTransfers.get(file.filePath);
+      if (priorTransfer) {
+        await markFilePath(
+          file.id,
+          "transferred",
+          undefined,
+          priorTransfer.fileSizeBytes ?? undefined,
         );
-      } else if (result.statusCode === 404) {
-        await markFilePath(file.id, "skipped", String(result.body.message ?? "Not found"));
         await appendLog(
           schoolJobId,
           "SKIP",
-          `${file.filePath} | ${result.statusCode} ${String(result.body.message ?? "")}`,
+          `${file.filePath} | already transferred (skipped upload)`,
         );
-      } else {
-        const message = String(result.body.message ?? JSON.stringify(result.body));
-        await markFilePath(file.id, "failed", message);
-        await appendLog(
-          schoolJobId,
-          "ERROR",
-          `${file.filePath} | ${result.statusCode} ${message}`,
-        );
+        continue;
       }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      await markFilePath(file.id, "failed", message);
-      await appendLog(schoolJobId, "ERROR", `${file.filePath} | ${message}`);
+
+      await appendLog(
+        schoolJobId,
+        "TRANSFER",
+        `[${processed}/${pendingTotal}] ${file.filePath}`,
+      );
+
+      try {
+        const result = await transferFile(file.filePath);
+
+        if (result.ok) {
+          const size = Number(result.body.size ?? 0);
+          await markFilePath(file.id, "transferred", undefined, size);
+          await appendLog(
+            schoolJobId,
+            "OK",
+            size > 0 ? `${file.filePath} (${size} bytes)` : file.filePath,
+          );
+        } else if (result.statusCode === 404) {
+          await markFilePath(file.id, "skipped", String(result.body.message ?? "Not found"));
+          await appendLog(
+            schoolJobId,
+            "SKIP",
+            `${file.filePath} | ${result.statusCode} ${String(result.body.message ?? "")}`,
+          );
+        } else {
+          const message = String(result.body.message ?? JSON.stringify(result.body));
+          await markFilePath(file.id, "failed", message);
+          await appendLog(
+            schoolJobId,
+            "ERROR",
+            `${file.filePath} | ${result.statusCode} ${message}`,
+          );
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        await markFilePath(file.id, "failed", message);
+        await appendLog(schoolJobId, "ERROR", `${file.filePath} | ${message}`);
+      }
     }
 
     await refreshSchoolJobCounts(schoolJobId);

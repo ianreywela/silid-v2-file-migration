@@ -17,7 +17,7 @@ export type CollectResult = {
   userCount: number;
   classCount: number;
   classIds: string[];
-  folderPaths: string[];
+  pathKeys: Set<string>;
 };
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -278,6 +278,6 @@ export async function collectFolderPathsBySchool(
     userCount: users.length,
     classCount: classIds.size,
     classIds: Array.from(classIds).sort(),
-    folderPaths: Array.from(keys).sort(),
+    pathKeys: keys,
   };
 }

@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "drizzle-kit migrate && next build",
-    "start": "next start",
+    "start": "NODE_OPTIONS='--max-old-space-size=2048' next start",
     "lint": "eslint",
     "worker": "tsx --env-file=.env worker/migration-worker.ts",
     "db:generate": "drizzle-kit generate",
