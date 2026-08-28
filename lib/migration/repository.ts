@@ -115,7 +115,16 @@ export async function getTransferredPathIndexForSchool(
   return index;
 }
 
-const UPSERT_BATCH_SIZE = 500;
+/** Keep under Postgres btree index row limit (~2704 bytes including uuid). */
+const MAX_FILE_PATH_CHARS = 2000;
+const UPSERT_BATCH_SIZE = 100;
+
+function normalizeFilePath(filePath: string): string | null {
+  const cleaned = filePath.replace(/\0/g, "").trim().replace(/^\/+/, "");
+  if (!cleaned) return null;
+  if (cleaned.length > MAX_FILE_PATH_CHARS) return null;
+  return cleaned;
+}
 
 async function insertFilePathBatch(
   schoolJobId: string,
@@ -132,28 +141,60 @@ async function insertFilePathBatch(
         schoolJobId,
         filePath,
         status: "transferred" as const,
-        fileSizeBytes: prior.fileSizeBytes,
+        fileSizeBytes: prior.fileSizeBytes ?? null,
+        errorMessage: null,
         transferredAt: prior.transferredAt ?? new Date(),
       };
     }
 
-    return { schoolJobId, filePath, status: "pending" as const };
+    return {
+      schoolJobId,
+      filePath,
+      status: "pending" as const,
+      fileSizeBytes: null,
+      errorMessage: null,
+      transferredAt: null,
+    };
   });
 
-  await db.insert(migrationFilePaths).values(toInsert).onConflictDoNothing();
+  try {
+    await db
+      .insert(migrationFilePaths)
+      .values(toInsert)
+      .onConflictDoNothing({
+        target: [migrationFilePaths.schoolJobId, migrationFilePaths.filePath],
+      });
+  } catch (error) {
+    const cause =
+      error instanceof Error && error.cause instanceof Error
+        ? error.cause.message
+        : error instanceof Error
+          ? error.message
+          : String(error);
+    throw new Error(
+      `insert migration_file_paths failed (batch=${toInsert.length}): ${cause}`,
+    );
+  }
 }
 
 export async function upsertFilePathsFromSet(
   schoolJobId: string,
   schoolCode: string,
   paths: Set<string>,
-): Promise<number> {
-  if (paths.size === 0) return 0;
+): Promise<{ inserted: number; skippedInvalid: number }> {
+  if (paths.size === 0) return { inserted: 0, skippedInvalid: 0 };
 
   let batch: string[] = [];
   let inserted = 0;
+  let skippedInvalid = 0;
 
-  for (const filePath of paths) {
+  for (const rawPath of paths) {
+    const filePath = normalizeFilePath(rawPath);
+    if (!filePath) {
+      skippedInvalid += 1;
+      continue;
+    }
+
     batch.push(filePath);
     if (batch.length >= UPSERT_BATCH_SIZE) {
       await insertFilePathBatch(schoolJobId, schoolCode, batch);
@@ -167,7 +208,7 @@ export async function upsertFilePathsFromSet(
     inserted += batch.length;
   }
 
-  return inserted;
+  return { inserted, skippedInvalid };
 }
 
 export async function upsertFilePaths(

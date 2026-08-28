@@ -81,15 +81,19 @@ export async function processSchoolJob(job: MigrationSchoolJob): Promise<void> {
     });
 
     const collected = collection.pathKeys.size;
-    await upsertFilePathsFromSet(schoolJobId, schoolCode, collection.pathKeys);
+    const { inserted, skippedInvalid } = await upsertFilePathsFromSet(
+      schoolJobId,
+      schoolCode,
+      collection.pathKeys,
+    );
     await refreshSchoolJobCounts(schoolJobId);
 
     const pending = await countPendingFilePaths(schoolJobId);
-    const skippedExisting = collected - pending;
+    const skippedExisting = Math.max(0, inserted - pending);
     await appendLog(
       schoolJobId,
       "JSON",
-      `collected=${collected} pending=${pending} already_transferred=${skippedExisting}`,
+      `collected=${collected} inserted=${inserted} pending=${pending} already_transferred=${skippedExisting} invalid_paths=${skippedInvalid}`,
     );
   } else {
     await updateSchoolJob(schoolJobId, {

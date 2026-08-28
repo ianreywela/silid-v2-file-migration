@@ -46,13 +46,27 @@ async function processBatch(batchId: string, concurrency: number) {
           try {
             await processSchoolJob(job);
           } catch (error) {
+            const cause =
+              error instanceof Error && error.cause instanceof Error
+                ? error.cause.message
+                : undefined;
             const message = error instanceof Error ? error.message : String(error);
-            console.error(`School job ${job.id} failed:`, message);
+            console.error(
+              `School job ${job.id} failed:`,
+              cause ? `${message} | cause: ${cause}` : message,
+            );
             await db
               .update(migrationSchoolJobs)
               .set({ status: "failed", updatedAt: new Date() })
               .where(eq(migrationSchoolJobs.id, job.id));
-            await appendLog(job.id, "ERROR", `School job failed: ${message}`);
+            await appendLog(
+              job.id,
+              "ERROR",
+              `School job failed: ${cause ? `${message} | cause: ${cause}` : message}`.slice(
+                0,
+                2000,
+              ),
+            );
           }
         }),
       ),
