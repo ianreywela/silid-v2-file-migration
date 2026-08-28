@@ -147,10 +147,10 @@ async function collectKeysForClass(db: Firestore, classId: string, out: Set<stri
       }
     }
 
-    const evidenceSnap = await activityDoc.ref.collection("evidence").get();
-    for (const evidenceDoc of evidenceSnap.docs) {
-      collectFromDoc(evidenceDoc.data(), out);
-    }
+    // const evidenceSnap = await activityDoc.ref.collection("evidence").get();
+    // for (const evidenceDoc of evidenceSnap.docs) {
+    //   collectFromDoc(evidenceDoc.data(), out);
+    // }
   }
 
   const postsSnap = await db.collection("discussions").doc(classId).collection("posts").get();
